@@ -1,17 +1,16 @@
-use region::models::linear_v2::*;
+use region::region::Region;
 
 use std::fs::File;
-use std::io::Write;
-
-use binrw::{BinRead, BinWrite};
-use sha2::{Sha256, Digest};
-use hex;
+use std::hash::Hash;
 
 fn main() {
     let a = "r.0.0.linearv2";
-    let mut f = File::open(a).unwrap();
-    println!("{:?}", SuperBlock::read(&mut f).unwrap());
-    let bitmap = ChunkBitMap::read(&mut f).unwrap();
-    println!("{:?}", deserialize_hashmap(&mut f).unwrap())
+    let mut file = File::open(a).unwrap();
+    let r = Region::from_linear_v2(file).unwrap();
+    println!("{:016x}", r.hash());
+    // for (i,c) in r.chunks.iter().enumerate()
+    // {
+    //     println!("Chunk{}: ({},{})",i,c.x,c.z)
+    // }
 }
 

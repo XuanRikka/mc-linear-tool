@@ -42,6 +42,26 @@ pub struct BucketHeader
 }
 
 
+#[derive(BinRead, BinWrite, Debug)]
+#[brw(big)]
+pub struct BucketChunk {
+    pub chunk_size: u32,
+    pub timestamp: u64,
+
+    #[br(count = chunk_data_len(chunk_size))]
+    pub chunk_data: Vec<u8>,
+}
+
+
+fn chunk_data_len(size: u32) -> usize {
+    if size < 8 {
+        0
+    } else {
+        (size - 8) as usize
+    }
+}
+
+
 pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_datas: Vec<Vec<u8>>,
                                   compression_level: CompressionLevel)
                                   -> Result<(), Box<dyn Error>>

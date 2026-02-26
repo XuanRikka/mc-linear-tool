@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::hash::Hasher;
-use std::io::{copy, Cursor, Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 
 use binrw::{BinRead,BinWrite};
 use xxhash_rust::xxh64::Xxh64;
 use zstd::{decode_all};
 use zstd::zstd_safe::CompressionLevel;
 use zstd::stream::write::Encoder;
-use crate::models::linear_v1;
-use crate::models::linear_v1::ChunkHeaders;
+
+use crate::models::{linear_v1, linear_v2};
 
 #[derive(Debug)]
 pub struct Region {
@@ -42,9 +42,9 @@ impl Region {
         let compress_cursor = Cursor::new(compress_buf);
 
         let mut decompress_buf =  Cursor::new(decode_all(compress_cursor)?);
-        let headers = ChunkHeaders::read(&mut decompress_buf)?;
+        let headers = linear_v1::ChunkHeaders::read(&mut decompress_buf)?;
 
-        let mut chunks: Vec<Chunk> = Vec::new();
+        let mut chunks: Vec<Chunk> = Vec::with_capacity(1024);
         for (index, chunk_header) in headers.chunk_headers.iter().enumerate()
         {
             let mut data = vec![0u8; chunk_header.size as usize];
@@ -66,7 +66,8 @@ impl Region {
         ))
     }
 
-    pub fn to_linear_v1<F: Write + Seek>(&self, mut f: F, compression_level: CompressionLevel) -> Result<(), Box<dyn Error>>
+    pub fn to_linear_v1<F: Write + Seek>(&self, mut f: F, compression_level: CompressionLevel)
+        -> Result<(), Box<dyn Error>>
     {
         let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
 
@@ -111,6 +112,70 @@ impl Region {
         Ok(())
     }
 
+    pub fn from_linear_v2<F: Read + Seek>(mut f: F)
+        -> Result<Region, Box<dyn Error>>
+    {
+        let superblock = linear_v2::SuperBlock::read(&mut f)?;
+        let grid_size = superblock.grid_size as usize;
+
+        if ![1, 2, 4, 8, 16, 32].contains(&grid_size) {
+            return Err(format!("Incorrect grid_size: {}", grid_size).into());
+        }
+
+        let chunk_bitmap = linear_v2::ChunkBitMap::read(&mut f)?;
+
+        let nbt_features = linear_v2::deserialize_hashmap(&mut f)?;
+
+        let bucket_datas = linear_v2::deserialize_bucket(&mut f, superblock.grid_size)?;
+
+        let chunks_per_bucket = 32 / grid_size;
+        let mut chunks: Vec<Chunk> = Vec::with_capacity(1024);
+
+        let parsed_buckets: Vec<Vec<linear_v2::BucketChunk>> = bucket_datas
+            .iter()
+            .map(|b| linear_v2_parse_bucket_chunks(b, chunks_per_bucket))
+            .collect();
+
+        for chunk_index in 0..1024 {
+            let x_in_region = chunk_index % 32;
+            let z_in_region = chunk_index / 32;
+
+            let bucket_x = x_in_region / chunks_per_bucket;
+            let bucket_z = z_in_region / chunks_per_bucket;
+            let ix = x_in_region % chunks_per_bucket;
+            let iz = z_in_region % chunks_per_bucket;
+            let bucket_index = bucket_x * grid_size + bucket_z;
+
+            let (raw, ts) = if chunk_bitmap.bit_map[chunk_index] {
+                if let Some(bucket) = parsed_buckets.get(bucket_index) {
+                    let local_index = ix * chunks_per_bucket + iz;
+                    if let Some(bc) = bucket.get(local_index) {
+                        (bc.chunk_data.clone(), bc.timestamp)
+                    } else {
+                        (Vec::new(), 0)
+                    }
+                } else {
+                    (Vec::new(), 0)
+                }
+            } else {
+                (Vec::new(), 0)
+            };
+
+            chunks.push(Chunk {
+                raw_chunk: raw,
+                timestamps: ts,
+                x: superblock.region_x as i64 * 32 + x_in_region as i64,
+                z: superblock.region_z as i64 * 32 + z_in_region as i64,
+            });
+        }
+
+        Ok(Region::new(
+            chunks,
+            superblock.region_x,
+            superblock.region_z,
+            nbt_features,
+        ))
+    }
 
     pub fn chunk_count(&self) -> i16
     {
@@ -178,3 +243,18 @@ impl Chunk
     }
 }
 
+
+fn linear_v2_parse_bucket_chunks(bucket: &[u8], chunks_per_bucket: usize) -> Vec<linear_v2::BucketChunk>
+{
+    let mut cursor = Cursor::new(bucket);
+    let mut result = Vec::new();
+
+    while (cursor.position() as usize) < bucket.len() {
+        match linear_v2::BucketChunk::read(&mut cursor) {
+            Ok(chunk) => result.push(chunk),
+            Err(_) => break,
+        }
+    }
+
+    result
+}
