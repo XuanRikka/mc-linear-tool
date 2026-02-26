@@ -66,7 +66,7 @@ impl Region {
         ))
     }
 
-    pub fn to_linear_v1<F: Write + Seek>(&self, mut f: F, compression_level: CompressionLevel)
+    pub fn to_linear_v1<F: Write + Seek>(self, mut f: F, compression_level: CompressionLevel)
         -> Result<(), Box<dyn Error>>
     {
         let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
@@ -175,6 +175,73 @@ impl Region {
             superblock.region_z,
             nbt_features,
         ))
+    }
+
+    pub fn to_linear_v2<W: Write + Seek>(mut self, f: &mut W, compression_level: CompressionLevel,
+                                  grid_size: i8) -> Result<(), Box<dyn Error>>
+    {
+        if ![1, 2, 4, 8, 16, 32].contains(&grid_size) {
+            return Err(format!("Incorrect grid_size: {}", grid_size).into());
+        }
+
+        let superblock = linear_v2::SuperBlock {
+            version: 2,
+            newest_timestamp: self.get_newest_timestamp(),
+            grid_size: grid_size,
+            region_x: self.region_x,
+            region_z: self.region_z,
+        };
+        superblock.write(f)?;
+
+        let chunk_bitmap: Vec<bool> = self.chunks.iter().map(|x| !x.is_empty()).collect();
+        let bitmap = linear_v2::ChunkBitMap {
+            bit_map: <[bool; 1024]>::try_from(chunk_bitmap).expect("严重错误：单Region实例存储的区块数不为1024")
+        };
+        bitmap.write(f)?;
+
+        linear_v2::serialize_hashmap(&self.nbt_features, f)?;
+
+        let cpb = 32 / grid_size as usize;
+
+        let mut buckets_data: Vec<Vec<u8>> =
+            Vec::with_capacity((grid_size * grid_size) as usize);
+
+        for bx in 0..grid_size as usize {
+            for bz in 0..grid_size as usize {
+                let mut data = Cursor::new(Vec::new());
+
+                for ix in 0..cpb {
+                    for iz in 0..cpb {
+                        let global_x = bx * cpb + ix;
+                        let global_z = bz * cpb + iz;
+                        let idx = global_x + global_z * 32;
+
+                        let chunk = &mut self.chunks[idx];
+
+                        let chunk_data = linear_v2::BucketChunk {
+                            chunk_size: chunk.raw_chunk.len() as u32 + 8,
+                            timestamp: chunk.timestamps,
+                            chunk_data: std::mem::take(&mut chunk.raw_chunk),
+                        };
+
+                        chunk_data.write(&mut data)?;
+                    }
+                }
+
+                buckets_data.push(data.into_inner());
+            }
+        }
+
+        linear_v2::serialize_bucket(
+            f,
+            grid_size,
+            buckets_data,
+            compression_level
+        )?;
+
+        f.write_all(linear_v2::MAGIC)?;
+
+        Ok(())
     }
 
     pub fn chunk_count(&self) -> i16
