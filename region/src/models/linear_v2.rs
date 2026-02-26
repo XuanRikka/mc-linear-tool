@@ -4,7 +4,7 @@ use std::io;
 use std::io::{Cursor, Read, Seek, Write};
 
 use binrw::{BinRead, BinWrite};
-use zstd::{decode_all, encode_all};
+use zstd::{decode_all};
 use zstd::stream::write::Encoder;
 use zstd::zstd_safe::CompressionLevel;
 use xxhash_rust::xxh64::xxh64;
@@ -87,14 +87,15 @@ pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_d
 
     for data in bucket_datas
     {
+        // 不知道为什么要写这个，但是python源代码里有，所以加上比较保险
         if data.len() == 64 {
             compression_data.push(Vec::new());
             continue;
         }
 
         let mut encoder = Encoder::new(Vec::new(), compression_level)?;
-        encoder.write(&data)?;
         encoder.include_checksum(true)?;
+        encoder.write(&data)?;
         compression_data.push(
             encoder.finish()?
         )
@@ -200,7 +201,7 @@ pub fn deserialize_bucket_header<R: Read + Seek>(reader: &mut R, grid_size: i8)
 
     let mut bucket_headers: Vec<BucketHeader> = Vec::new();
 
-    for i in 0..bucket_count
+    for _ in 0..bucket_count
     {
         bucket_headers.push(
             BucketHeader::read(reader)?

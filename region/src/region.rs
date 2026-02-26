@@ -131,10 +131,10 @@ impl Region {
         let chunks_per_bucket = 32 / grid_size;
         let mut chunks: Vec<Chunk> = Vec::with_capacity(1024);
 
-        let parsed_buckets: Vec<Vec<linear_v2::BucketChunk>> = bucket_datas
-            .iter()
-            .map(|b| linear_v2_parse_bucket_chunks(b, chunks_per_bucket))
-            .collect();
+        let mut parsed_buckets: Vec<Vec<linear_v2::BucketChunk>> = bucket_datas
+                    .iter()
+                    .map(|b| linear_v2_parse_bucket_chunks(b))
+                    .collect();
 
         for chunk_index in 0..1024 {
             let x_in_region = chunk_index % 32;
@@ -147,10 +147,10 @@ impl Region {
             let bucket_index = bucket_x * grid_size + bucket_z;
 
             let (raw, ts) = if chunk_bitmap.bit_map[chunk_index] {
-                if let Some(bucket) = parsed_buckets.get(bucket_index) {
+                if let Some(bucket) = parsed_buckets.get_mut(bucket_index) {
                     let local_index = ix * chunks_per_bucket + iz;
-                    if let Some(bc) = bucket.get(local_index) {
-                        (bc.chunk_data.clone(), bc.timestamp)
+                    if let Some(bc) = bucket.get_mut(local_index) {
+                        (std::mem::take(&mut bc.chunk_data), bc.timestamp)
                     } else {
                         (Vec::new(), 0)
                     }
@@ -312,7 +312,7 @@ impl Chunk
 }
 
 
-fn linear_v2_parse_bucket_chunks(bucket: &[u8], chunks_per_bucket: usize) -> Vec<linear_v2::BucketChunk>
+fn linear_v2_parse_bucket_chunks(bucket: &[u8]) -> Vec<linear_v2::BucketChunk>
 {
     let mut cursor = Cursor::new(bucket);
     let mut result = Vec::new();
