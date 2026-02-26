@@ -1,0 +1,9 @@
+[package]
+name = "region"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+binrw = "0.15.0"
+xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
+zstd = "0.13.3"
