@@ -95,7 +95,7 @@ pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_d
 
         let mut encoder = Encoder::new(Vec::new(), compression_level)?;
         encoder.include_checksum(true)?;
-        encoder.write(&data)?;
+        encoder.write_all(&data)?;
         compression_data.push(
             encoder.finish()?
         )
