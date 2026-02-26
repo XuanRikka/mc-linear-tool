@@ -185,7 +185,7 @@ impl Region {
         }
 
         let superblock = linear_v2::SuperBlock {
-            version: 2,
+            version: 3,
             newest_timestamp: self.get_newest_timestamp(),
             grid_size: grid_size,
             region_x: self.region_x,
