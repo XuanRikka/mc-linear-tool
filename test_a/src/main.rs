@@ -12,7 +12,7 @@ fn main() {
     {
         let b = "r.0.0.linearv22";
         let mut file2 = File::create(b).unwrap();
-        r.to_linear_v2(&mut file2, 1, 1).unwrap();
+        r.to_linear_v2(&mut file2, 1, 2).unwrap();
     }
 
     let b = "r.0.0.linearv22";

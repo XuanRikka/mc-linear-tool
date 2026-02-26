@@ -219,7 +219,8 @@ impl Region {
                         let chunk = &mut self.chunks[idx];
 
                         let chunk_data = linear_v2::BucketChunk {
-                            chunk_size: chunk.raw_chunk.len() as u32 + 8,
+                            // 如果区块为空的话chunk_size必须为0，但是timestamp照写，相当于不包含timestamp的长度
+                            chunk_size: if chunk.is_empty() { 0 } else { chunk.raw_chunk.len() as u32 + 8 },
                             timestamp: chunk.timestamps,
                             chunk_data: std::mem::take(&mut chunk.raw_chunk),
                         };

@@ -5,6 +5,7 @@ use std::io::{Cursor, Read, Seek, Write};
 
 use binrw::{BinRead, BinWrite};
 use zstd::{decode_all, encode_all};
+use zstd::stream::write::Encoder;
 use zstd::zstd_safe::CompressionLevel;
 use xxhash_rust::xxh64::xxh64;
 
@@ -86,11 +87,16 @@ pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_d
 
     for data in bucket_datas
     {
+        if data.len() == 64 {
+            compression_data.push(Vec::new());
+            continue;
+        }
+
+        let mut encoder = Encoder::new(Vec::new(), compression_level)?;
+        encoder.write(&data)?;
+        encoder.include_checksum(true)?;
         compression_data.push(
-            encode_all(
-                Cursor::new(data),
-                compression_level
-            )?
+            encoder.finish()?
         )
     }
 
