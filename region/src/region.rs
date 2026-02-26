@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::hash::Hasher;
-use std::io::{Cursor, Read, Write};
+use std::io::{copy, Cursor, Read, Seek, Write};
 
 use binrw::{BinRead,BinWrite};
 use xxhash_rust::xxh64::Xxh64;
-use zstd::decode_all;
-
+use zstd::{decode_all};
+use zstd::zstd_safe::CompressionLevel;
+use zstd::stream::write::Encoder;
 use crate::models::linear_v1;
 use crate::models::linear_v1::ChunkHeaders;
 
@@ -31,7 +32,7 @@ impl Region {
     }
 
 
-    pub fn from_linear_v1<F: Read + Write + std::io::Seek>(mut file: F, region_x: i32, region_z: i32)
+    pub fn from_linear_v1<F: Read + Seek>(mut file: F, region_x: i32, region_z: i32)
         -> Result<Region, Box<dyn Error>>
     {
         let superblock = linear_v1::SuperBlock::read(&mut file)?;
@@ -65,13 +66,58 @@ impl Region {
         ))
     }
 
-
-    pub fn chunk_count(&self) -> usize
+    pub fn to_linear_v1<F: Write + Seek>(&self, mut f: F, compression_level: CompressionLevel) -> Result<(), Box<dyn Error>>
     {
-        self.chunks.len()
+        let mut data: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+
+
+        // 写入头部数据
+        for chunk in &self.chunks
+        {
+            let header = linear_v1::ChunkHeader {
+                size: chunk.raw_chunk.len() as u32,
+                timestamp: chunk.timestamps as u32
+            };
+            header.write(&mut data)?;
+        };
+
+        // 写入实际数据
+        for chunk in &self.chunks
+        {
+            data.write_all(&chunk.raw_chunk)?;
+        };
+
+        // 这里不直接一开始就使用Encoder的原因是因为binrw要求实现了Seek的类型
+        data.seek(std::io::SeekFrom::Start(0))?;
+        let mut encoder = Encoder::new(Vec::new(), compression_level)?;
+        encoder.include_checksum(true)?;
+        encoder.write_all(&data.get_ref())?;
+        let compress_data = encoder.finish()?;
+
+
+        let superblock = linear_v1::SuperBlock {
+            version: 1,
+            newest_timestamp: self.get_newest_timestamp(),
+            compression_level: compression_level as i8,
+            chunk_count: self.chunk_count(),
+            compressed_data_length: compress_data.len() as u32,
+            reserved: 0,
+        };
+
+        superblock.write(&mut f)?;
+        f.write_all(&compress_data)?;
+        f.write_all(linear_v1::MAGIC)?;
+        f.flush()?;
+        Ok(())
     }
 
-    pub fn hash(&self)
+
+    pub fn chunk_count(&self) -> i16
+    {
+        self.chunks.iter().filter(|x| !x.is_empty()).count() as i16
+    }
+
+    pub fn hash(&self) -> u64
     {
         let mut xxhash = Xxh64::new(0);
         let mut data = [0u8; 8];
@@ -90,8 +136,16 @@ impl Region {
                 xxhash.write("\x01".as_bytes());
                 let len = chunk.raw_chunk.len() as u32;
                 xxhash.write(&len.to_be_bytes());
+                xxhash.write(&chunk.raw_chunk);
             }
         }
+
+        xxhash.digest()
+    }
+
+    pub fn get_newest_timestamp(&self) -> u64
+    {
+        self.chunks.iter().map(|chunk| chunk.timestamps).max().unwrap_or(0)
     }
 }
 

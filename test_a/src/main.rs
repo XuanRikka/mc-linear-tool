@@ -1,16 +1,17 @@
-use region::region::Region;
-use region::utils::parse_region_coords;
+use region::models::linear_v2::*;
 
 use std::fs::File;
+use std::io::Write;
 
+use binrw::{BinRead, BinWrite};
+use sha2::{Sha256, Digest};
+use hex;
 
 fn main() {
-    let a = "r.0.0.linear";
-
-    let (rx,rz) = parse_region_coords(a).expect("解析输入文件的文件名失败");
-
-    let f = File::open(a).expect("打开文件失败");
-    let region = Region::from_linear_v1(f,rx,rz).expect("解析区域文件失败");
-    println!("{:?}",region);
-    println!("{:?}",region.hash());
+    let a = "r.0.0.linearv2";
+    let mut f = File::open(a).unwrap();
+    println!("{:?}", SuperBlock::read(&mut f).unwrap());
+    let bitmap = ChunkBitMap::read(&mut f).unwrap();
+    println!("{:?}", deserialize_hashmap(&mut f).unwrap())
 }
+

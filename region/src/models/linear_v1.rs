@@ -1,7 +1,10 @@
 use binrw::{BinRead,BinWrite};
 
+
+pub const MAGIC: &[u8; 8] = b"\xC3\xFF\x13\x18\x3C\xCA\x9D\x9A";
+
 #[derive(BinRead, BinWrite, Debug)]
-#[brw(little)]
+#[brw(big)]
 pub struct SuperBlock
 {
     #[brw(magic = b"\xC3\xFF\x13\x18\x3C\xCA\x9D\x9A")]
@@ -22,7 +25,7 @@ pub struct ChunkHeaders
 }
 
 #[derive(BinRead, BinWrite, Debug)]
-#[brw(little)]
+#[brw(big)]
 pub struct ChunkHeader
 {
     pub size: u32,
