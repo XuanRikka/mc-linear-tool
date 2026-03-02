@@ -63,9 +63,9 @@ fn chunk_data_len(size: u32) -> usize {
 }
 
 
-pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_datas: Vec<Vec<u8>>,
-                                  compression_level: CompressionLevel)
-                                  -> Result<(), Box<dyn Error>>
+pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, buckets_data: Vec<Vec<u8>>,
+                                         compression_level: CompressionLevel)
+                                         -> Result<(), Box<dyn Error>>
 {
     if !matches!(grid_size, 1 | 2 | 4 | 8 | 16 | 32) {
         return Err(format!(
@@ -75,17 +75,17 @@ pub fn serialize_bucket<W: Write + Seek>(writer: &mut W, grid_size: i8, bucket_d
     }
 
     let expected_bucket_count = (grid_size as usize) * (grid_size as usize);
-    if bucket_datas.len() != expected_bucket_count {
+    if buckets_data.len() != expected_bucket_count {
         return Err(format!(
             "bucket 数量不匹配: 期望 {}，实际 {}",
             expected_bucket_count,
-            bucket_datas.len()
+            buckets_data.len()
         ).into());
     }
 
     let mut compression_data: Vec<Vec<u8>> = Vec::new();
 
-    for data in bucket_datas
+    for data in buckets_data
     {
         // 不知道为什么要写这个，但是python源代码里有，所以加上比较保险
         if data.len() == 64 {

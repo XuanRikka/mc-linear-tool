@@ -7,3 +7,4 @@ edition = "2024"
 binrw = "0.15.0"
 xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
 zstd = "0.13.3"
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }

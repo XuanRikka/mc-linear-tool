@@ -1,15 +1,18 @@
+use binrw::{BinRead, BinWrite};
 use std::collections::HashMap;
 use std::error::Error;
+use std::fs::File;
 use std::hash::Hasher;
-use std::io::{Cursor, Read, Seek, Write};
-
-use binrw::{BinRead,BinWrite};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::iter::zip;
+use std::path::Path;
 use xxhash_rust::xxh64::Xxh64;
-use zstd::{decode_all};
-use zstd::zstd_safe::CompressionLevel;
 use zstd::stream::write::Encoder;
+use zstd::zstd_safe::CompressionLevel;
+use zstd::decode_all;
 
-use crate::models::{linear_v1, linear_v2};
+use crate::models::{anvil, linear_v1, linear_v2};
+use crate::utils::{collect_mcc_files, parse_region_coords};
 
 #[derive(Debug)]
 pub struct Region {
@@ -50,11 +53,12 @@ impl Region {
             let mut data = vec![0u8; chunk_header.size as usize];
             decompress_buf.read_exact(&mut data)?;
             chunks.push(
-                Chunk::new(
-                    data,
-                    chunk_header.timestamp as u64,
-                    index as u16
-                )
+                Chunk {
+                    raw_chunk: data,
+                    timestamps: chunk_header.timestamp as u64,
+                    x: (region_x * 32 + (index % 32) as i32) as i64,
+                    z: (region_z * 32 + (index / 32) as i32) as i64,
+                }
             );
         };
 
@@ -89,7 +93,7 @@ impl Region {
         };
 
         // 这里不直接一开始就使用Encoder的原因是因为binrw要求实现了Seek的类型
-        data.seek(std::io::SeekFrom::Start(0))?;
+        data.seek(SeekFrom::Start(0))?;
         let mut encoder = Encoder::new(Vec::new(), compression_level)?;
         encoder.include_checksum(true)?;
         encoder.write_all(&data.get_ref())?;
@@ -245,6 +249,58 @@ impl Region {
         Ok(())
     }
 
+    pub fn from_anvil<P: AsRef<Path>>(path: P) -> Result<Region, Box<dyn Error>>
+    {
+        let p = path.as_ref();
+        let (region_x, region_z) = parse_region_coords(&p)?;
+
+
+        let mut file = File::open(&p)?;
+        let superblock = anvil::deserialize_superblock(&mut file)?;
+        let mcc_files = collect_mcc_files(&p)?;
+        let chunks_data = anvil::deserialize_chunk_data(&mut file, mcc_files, &superblock)?;
+
+        let mut chunks: Vec<Chunk> = Vec::with_capacity(1024);
+        for (index, (chunk, info)) in zip(chunks_data, superblock.chunks_info).enumerate()
+        {
+            chunks.push(
+                Chunk {
+                    raw_chunk: chunk,
+                    timestamps: info.timestamp as u64,
+                    x: (region_x * 32 + (index % 32) as i32) as i64,
+                    z: (region_z * 32 + (index / 32) as i32) as i64,
+                }
+            )
+        };
+        Ok(Region {
+            chunks,
+            region_x,
+            region_z,
+            nbt_features: HashMap::new()
+        })
+    }
+
+    pub fn to_anvil<P: AsRef<Path>, W: Write + Seek>
+        (self, compression_level: u8, compression_type: u8, mut file: W, path: P)
+        -> Result<(), Box<dyn Error>>
+    {
+        let chunks = self.chunks;
+        if chunks.len() != 1024
+        {
+            return Err(format!("区块数量异常，应为1024，实为{}", chunks.len()).into());
+        }
+
+        file.write_all(&vec![0u8; 8192])?;
+
+        let chunks_info = anvil::serialize_chunk_data(
+            &mut file, path, chunks, compression_level, compression_type
+        )?;
+        file.seek(SeekFrom::Start(0))?;
+        anvil::serialize_superblock(&mut file, &chunks_info)?;
+
+        Ok(())
+    }
+
     pub fn chunk_count(&self) -> i16
     {
         self.chunks.iter().filter(|x| !x.is_empty()).count() as i16
@@ -293,18 +349,7 @@ pub struct Chunk
 
 impl Chunk
 {
-    pub fn new(raw_chunk: Vec<u8>, timestamps: u64, index: u16) -> Chunk {
-        let x = (index % 32) as i64;
-        let z = (index / 32) as i64;
-
-        Chunk {
-            raw_chunk,
-            timestamps,
-            x,
-            z,
-        }
-    }
-
+    #[inline]
     pub fn is_empty(&self) -> bool
     {
         self.raw_chunk.is_empty()
