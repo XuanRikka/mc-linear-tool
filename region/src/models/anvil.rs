@@ -9,6 +9,7 @@ use binrw::{BinRead, BinWrite};
 use flate2::read::{GzDecoder, ZlibDecoder};
 use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::Compression;
+use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 use crate::region::Chunk;
 use crate::utils::parse_region_coords;
 
@@ -84,7 +85,7 @@ pub fn serialize_chunk_data<F: Write + Seek, P: AsRef<Path>>(f: &mut F, file_pat
             });
             continue;
         }
-        let t = compression(chunk.raw_chunk, compression_type, compression_level)?;
+        let t = chunk_compression(chunk.raw_chunk, compression_type, compression_level)?;
         let mut sector_count = (4 + 1 + t.len()).div_ceil(4096);
 
         if sector_count <= 255
@@ -163,12 +164,14 @@ pub fn deserialize_chunk_data<F: Read + Seek, P: AsRef<Path>>(f: &mut F, mcc: Op
         f.seek(SeekFrom::Start((info.sector_offset * 4096) as u64))?;
         let header = DataHeader::read(f)?;
 
-        // 压缩类型只到1-3，如果超过3了那就是有外部mcc，需要-128得到实际类型
+        // 压缩类型只到1-4，如果超过3了那就是有外部mcc，需要-128得到实际类型
         if header.compression_type >= 128
         {
-            let mcc_file = File::open(index_mcc.get(&(index as u32))
+            let mut mcc_file = File::open(index_mcc.get(&(index as u32))
                 .expect("读取mcc失败"))?;
-            data = decompression(mcc_file, header.compression_type-128)?;
+            let mut raw_data = Vec::new();
+            mcc_file.read_to_end(&mut raw_data)?;
+            data = chunk_decompress(raw_data, header.compression_type-128)?;
         }
         else
         {
@@ -180,7 +183,7 @@ pub fn deserialize_chunk_data<F: Read + Seek, P: AsRef<Path>>(f: &mut F, mcc: Op
 
             let mut t = vec![0u8; (header.chunk_length-1) as usize];
             f.read_exact(&mut t)?;
-            data = decompression(Cursor::new(t), header.compression_type)?
+            data = chunk_decompress(t, header.compression_type)?
         }
         result.push(data);
     };
@@ -188,25 +191,29 @@ pub fn deserialize_chunk_data<F: Read + Seek, P: AsRef<Path>>(f: &mut F, mcc: Op
     Ok(result)
 }
 
-pub fn decompression<R: Read>(mut data: R, compression_type: u8) -> Result<Vec<u8>, Box<dyn Error>>
+pub fn chunk_decompress(data: Vec<u8>, compression_type: u8) -> Result<Vec<u8>, Box<dyn Error>>
 {
     match compression_type
     {
         1 => {
-            let mut decoder = GzDecoder::new(data);
+            let mut decoder = GzDecoder::new(Cursor::new(data));
             let mut result = Vec::new();
             decoder.read_to_end(&mut result)?;
             Ok(result)
         }
         2 => {
-            let mut decoder = ZlibDecoder::new(data);
+            let mut decoder = ZlibDecoder::new(Cursor::new(data));
             let mut result = Vec::new();
             decoder.read_to_end(&mut result)?;
             Ok(result)
         },
         3 => {
+            Ok(data)
+        },
+        4 => {
+            let mut decoder = FrameDecoder::new(Cursor::new(data));
             let mut result = Vec::new();
-            data.read_to_end(&mut result)?;
+            decoder.read_to_end(&mut result)?;
             Ok(result)
         }
         _ => {
@@ -215,7 +222,7 @@ pub fn decompression<R: Read>(mut data: R, compression_type: u8) -> Result<Vec<u
     }
 }
 
-pub fn compression(data: Vec<u8>, compression_type: u8, compression_level: u8) -> Result<Vec<u8>, Box<dyn Error>>
+pub fn chunk_compression(data: Vec<u8>, compression_type: u8, compression_level: u8) -> Result<Vec<u8>, Box<dyn Error>>
 {
     match compression_type
     {
@@ -233,6 +240,12 @@ pub fn compression(data: Vec<u8>, compression_type: u8, compression_level: u8) -
         },
         3 => {
             Ok(data)
+        },
+        4 => {
+            let result = Vec::new();
+            let mut encoder = FrameEncoder::new(result);
+            encoder.write_all(&data)?;
+            Ok(encoder.finish()?)
         }
         _ => {
             Err("unknown compression type".into())
