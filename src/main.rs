@@ -11,8 +11,10 @@ use utils::*;
 use mclinear::region::Region;
 use mclinear::utils::{get_file_type, parse_region_coords, FileType};
 
+
 #[derive(Parser)]
-#[command(version, about)]
+#[command(version, about = "mc-linear-tool\n\
+                            用于将mc存档在linearv1/v2/anvil之间相互转换的工具")]
 struct Main
 {
     #[command(subcommand)]
@@ -22,10 +24,13 @@ struct Main
 #[derive(Subcommand, Debug)]
 enum Commands
 {
+    /// 转换为LinearV1格式
     #[command(name = "to-linear-v1")]
     ToLinearV1(ConvertArgs),
+    /// 转换为LinearV2格式
     #[command(name = "to-linear-v2", visible_alias = "to-linear")]
     ToLinearV2(ConvertArgs),
+    /// 转换为Anvil格式（即原版格式）
     #[command(name = "to-anvil")]
     ToAnvil(ConvertArgs),
 }
