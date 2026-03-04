@@ -3,13 +3,13 @@ use std::error::Error;
 use std::fs;
 use std::fs::File;
 use std::path::{PathBuf};
-use std::thread::{available_parallelism, spawn, JoinHandle};
+use std::thread::{spawn, JoinHandle};
 
 use clap::{Args, Parser, Subcommand};
 
-use utils::get_dir_file;
-use region::region::Region;
-use region::utils::{get_file_type, parse_region_coords, FileType};
+use utils::*;
+use mclinear::region::Region;
+use mclinear::utils::{get_file_type, parse_region_coords, FileType};
 
 #[derive(Parser)]
 #[command(version, about)]
@@ -41,40 +41,6 @@ struct ConvertArgs {
 
     #[arg(long, default_value_t = get_cpu_num())]
     cpu_num: usize,
-}
-
-fn get_cpu_num() -> usize
-{
-    available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-}
-
-fn split_into_chunks<T>(mut vec: Vec<T>, n: usize) -> Vec<Vec<T>> {
-    if n == 0 || vec.is_empty() {
-        return vec![];
-    }
-
-    let mut chunks = Vec::with_capacity(n.min(vec.len()));
-
-    for i in 0..n {
-        if vec.is_empty() {
-            break;
-        }
-
-        let remaining_chunks = n - i;
-        let current_chunk_size = (vec.len() + remaining_chunks - 1) / remaining_chunks;
-
-        if i == n - 1 {
-            chunks.push(vec);
-            break;
-        }
-
-        let chunk = vec.split_off(current_chunk_size);
-        chunks.push(chunk);
-    }
-
-    chunks
 }
 
 fn main() {
