@@ -141,6 +141,11 @@ fn handle_convert(files: Vec<PathBuf>, to: FileType, output: PathBuf,
 {
     for path in files
     {
+        if fs::metadata(&path)?.len() == 0
+        {
+            continue;
+        }
+
         let file_type: FileType;
         {
             let mut file = File::open(&path)?;
