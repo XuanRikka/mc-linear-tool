@@ -66,7 +66,7 @@ pub struct Linear
     pub version: u8,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FileType
 {
     Anvil,
@@ -83,7 +83,9 @@ pub fn get_file_type<R: Read + Seek>(file: &mut R) -> Result<FileType, Box<dyn E
     file.seek(SeekFrom::Start(pos))?;
 
     match result {
-        Err(BadMagic { .. }) => Ok(FileType::Anvil),
+        Err(BadMagic { .. }) => {
+            Ok(FileType::Anvil)
+        },
 
         Err(e) => Err(Box::new(e)),
 
@@ -91,7 +93,7 @@ pub fn get_file_type<R: Read + Seek>(file: &mut R) -> Result<FileType, Box<dyn E
             match linear.version
             {
                 1 | 2 => Ok(FileType::LinearV1),
-                3 => Ok(FileType::Anvil),
+                3 => Ok(FileType::LinearV2),
                 _ => Err("未知的linear版本".into())
             }
         }

@@ -22,25 +22,50 @@ struct Main
 #[derive(Subcommand, Debug)]
 enum Commands
 {
-    #[command(name = "tolinearv1")]
+    #[command(name = "to-linear-v1")]
     ToLinearV1(ConvertArgs),
-    #[command(name = "tolinearv2")]
+    #[command(name = "to-linear-v2", visible_alias = "to-linear")]
     ToLinearV2(ConvertArgs),
-    #[command(name = "toanvil")]
+    #[command(name = "to-anvil")]
     ToAnvil(ConvertArgs),
 }
 
 #[derive(Args, Debug, Clone)]
 struct ConvertArgs {
+    /// 输入文件的目录
     input_path: PathBuf,
 
+    /// 输出的目录
     output_path: PathBuf,
 
+    /// 压缩等级
+    #[arg(
+        long,
+        default_value_t = 1,
+        long_help = "压缩等级，具体范围由格式所采用的压缩算法决定\n\
+                     linear 系列 (zstd): 1-22\n\
+                     anvil 系列 (deflate): 1-9"
+    )]
     #[arg(long, default_value_t = 1)]
     compress_level: i32,
 
+    /// 控制转换的线程数，默认为cpu线程数
     #[arg(long, default_value_t = get_cpu_num())]
     cpu_num: usize,
+
+    /// linearv2特有参数，非linearv2时无效
+    #[arg(
+        long,
+        default_value_t = 1,
+        long_help = "linearv2特有参数，转换目标非linearv2时无效\n\
+                     用于控制分桶的数量，只能为1, 2, 4, 8, 16, 32\n\
+                     一般来说1压缩率最大，32压缩率最小"
+    )]
+    grid_size:  i8,
+
+    /// 是否遍历多层目录，用于方便整个村的的转换
+    #[arg(long, default_value_t = false)]
+    walk: bool
 }
 
 fn main() {
@@ -63,6 +88,10 @@ fn main() {
 
 fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error + Sync + Send>>
 {
+    if ![1, 2, 4 ,8 ,16 ,32].contains(&args.grid_size)
+    {
+        return Err("grid_size只能为1,2,4,8,16,32".into())
+    }
     if !args.input_path.is_dir() || !args.input_path.exists()
     {
         return Err("输入的目录不是目录或者不存在".into())
@@ -73,8 +102,10 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
         println!("输出目录不存在，已自动创建");
     }
 
-    let mut files = get_dir_file(&args.input_path, "mca", 1)?;
-    files.extend(get_dir_file(&args.input_path, "linear", 1)?);
+    let max_depth = if args.walk {114} else {1};
+
+    let mut files = get_dir_file(&args.input_path, "mca", max_depth)?;
+    files.extend(get_dir_file(&args.input_path, "linear", max_depth)?);
     println!("收集存档文件完成");
 
     let files_thread: Vec<Vec<PathBuf>> = split_into_chunks(files, args.cpu_num);
@@ -83,11 +114,10 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
         Vec::with_capacity(files_thread.len());
 
     for subfiles in files_thread {
-        let output_path = args.output_path.clone();
-        let compress_level = args.compress_level.clone();
+        let thread_args = args.clone();
         let to = to.clone();
         handles.push(spawn(move || {
-            handle_convert(subfiles, to, output_path, compress_level)
+            handle_convert(subfiles, to, thread_args)
         }));
     }
 
@@ -102,8 +132,7 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
 }
 
 
-fn handle_convert(files: Vec<PathBuf>, to: FileType, output: PathBuf,
-                 compression_level: i32) -> Result<(), Box<dyn Error + Send + Sync>>
+fn handle_convert(files: Vec<PathBuf>, to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error + Send + Sync>>
 {
     for path in files
     {
@@ -134,25 +163,46 @@ fn handle_convert(files: Vec<PathBuf>, to: FileType, output: PathBuf,
             }
         }
 
+        if !path.parent().unwrap().exists()
+        {
+            fs::create_dir_all(path.parent().unwrap())?
+        }
+
         let file_name = path.file_name().unwrap();
         let output_file_path: PathBuf;
+
+        let output_path: PathBuf;
+        if args.walk
+        {
+            let input_path_strip_prefix = path.strip_prefix(&args.input_path)?;
+            output_path = args.output_path.join(input_path_strip_prefix.parent().unwrap()).to_path_buf();
+            if !output_path.exists()
+            {
+                fs::create_dir_all(&output_path)?;
+            }
+        }
+        else
+        {
+            output_path = args.output_path.clone();
+        }
+
         match to {
             FileType::Anvil => {
-                output_file_path = output.join(file_name).with_extension("mca");
+                output_file_path = output_path.join(file_name).with_extension("mca");
                 let mut output_file = File::create(&output_file_path)?;
-                r.to_anvil(compression_level as u8, 2, &mut output_file, &output_file_path)
+                r.to_anvil(args.compress_level as u8, 2, &mut output_file, &output_file_path)
                     .expect(format!("转换 {} 时失败", path.display()).as_str());
             }
             FileType::LinearV1 => {
-                output_file_path = output.join(file_name).with_extension("linear");
+                output_file_path = output_path.join(file_name).with_extension("linear");
                 let mut output_file = File::create(&output_file_path)?;
-                r.to_linear_v1(&mut output_file, compression_level)
+                r.to_linear_v1(&mut output_file, args.compress_level)
                     .expect(format!("转换 {} 时失败", path.display()).as_str());
             }
             FileType::LinearV2 => {
-                output_file_path = output.join(file_name).with_extension("linear");
+                output_file_path = output_path.join(file_name).with_extension("linear");
                 let mut output_file = File::create(&output_file_path)?;
-                r.to_linear_v2(&mut output_file, compression_level, 1)
+                r.to_linear_v2(&mut output_file, args.compress_level, args.grid_size)
                     .expect(format!("转换 {} 时失败", path.display()).as_str());
             }
         }
