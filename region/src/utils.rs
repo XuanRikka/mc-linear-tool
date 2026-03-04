@@ -1,7 +1,9 @@
 use std::error::Error;
+use std::io::{Read, Seek, SeekFrom};
 use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
 
+use binrw::{BinRead, Error::BadMagic};
 
 /// 返回(x,z)
 pub fn parse_region_coords(path: impl AsRef<Path>) -> Result<(i32, i32), String> {
@@ -55,3 +57,44 @@ pub fn collect_mcc_files(path: impl AsRef<Path>) -> Result<Option<Vec<PathBuf>>,
         Ok(Some(files))
     }
 }
+
+#[derive(BinRead, Debug)]
+#[brw(big)]
+pub struct Linear
+{
+    #[brw(magic = b"\xC3\xFF\x13\x18\x3C\xCA\x9D\x9A")]
+    pub version: u8,
+}
+
+#[derive(Clone)]
+pub enum FileType
+{
+    Anvil,
+    LinearV1,
+    LinearV2
+}
+
+/// 简单判断文件类型，由于mca无文件头所以无法准确判断是否为mca文件，因此仅linear系列文件可信
+pub fn get_file_type<R: Read + Seek>(file: &mut R) -> Result<FileType, Box<dyn Error + Sync + Send>>
+{
+    let pos = file.stream_position()?;
+    let result = Linear::read(file);
+    // 恢复游标（无论成功失败都恢复）
+    file.seek(SeekFrom::Start(pos))?;
+
+    match result {
+        Err(BadMagic { .. }) => Ok(FileType::Anvil),
+
+        Err(e) => Err(Box::new(e)),
+
+        Ok(linear) => {
+            match linear.version
+            {
+                1 | 2 => Ok(FileType::LinearV1),
+                3 => Ok(FileType::Anvil),
+                _ => Err("未知的linear版本".into())
+            }
+        }
+    }
+}
+
