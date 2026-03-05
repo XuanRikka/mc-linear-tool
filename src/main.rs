@@ -1,10 +1,14 @@
 mod utils;
 use std::error::Error;
-use std::fs;
+use std::{fs};
 use std::fs::File;
 use std::path::{PathBuf};
 use std::thread::{spawn, JoinHandle};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
+use humantime::format_duration;
 use clap::{Args, Parser, Subcommand};
 
 use utils::*;
@@ -111,18 +115,21 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
 
     let mut files = get_dir_file(&args.input_path, "mca", max_depth)?;
     files.extend(get_dir_file(&args.input_path, "linear", max_depth)?);
-    println!("收集存档文件完成");
+    println!("收集存档文件完成，开始转换");
 
-    let files_thread: Vec<Vec<PathBuf>> = split_into_chunks(files, args.cpu_num);
+    let start_time = Instant::now();
+
+    let tasks: Arc<Mutex<VecDeque<PathBuf>>> = Arc::new(Mutex::new(files.into_iter().collect()));
 
     let mut handles: Vec<JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>> =
-        Vec::with_capacity(files_thread.len());
+        Vec::with_capacity(args.cpu_num);
 
-    for subfiles in files_thread {
+    for i in 0..args.cpu_num {
+        let tasks_rc = Arc::clone(&tasks);
         let thread_args = args.clone();
         let to = to.clone();
         handles.push(spawn(move || {
-            handle_convert(subfiles, to, thread_args)
+            handle_convert(tasks_rc, to, thread_args, i as u32)
         }));
     }
 
@@ -132,15 +139,29 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
     }
 
     println!("转换完成！");
+    println!("耗时：{}", format_duration(start_time.elapsed()));
+
 
     Ok(())
 }
 
 
-fn handle_convert(files: Vec<PathBuf>, to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error + Send + Sync>>
+fn handle_convert(files: Arc<Mutex<VecDeque<PathBuf>>>, to: FileType, args: ConvertArgs, num: u32) -> Result<(), Box<dyn Error + Send + Sync>>
 {
-    for path in files
+    loop
     {
+        let path_ = {
+            let mut tasks = files.lock().unwrap();
+            tasks.pop_front()
+        };
+        if path_.is_none()
+        {
+            println!("线程 {} 执行完成",num);
+            break
+        }
+
+        let path = path_.unwrap();
+
         if fs::metadata(&path)?.len() == 0
         {
             continue;
@@ -155,16 +176,16 @@ fn handle_convert(files: Vec<PathBuf>, to: FileType, args: ConvertArgs) -> Resul
         let r: Region;
         match file_type {
             FileType::Anvil => {
-                r = Region::from_anvil(&path).expect(format!("读取 {} 时失败", path.display()).as_str());
+                r = Region::from_anvil(&path).expect(format!("线程{}: 读取 {} 时失败", num, path.display()).as_str());
             }
             FileType::LinearV1 => {
                 let (region_x, region_z) = parse_region_coords(&path).expect(format!("解析 {} 的区域坐标时失败", path.display()).as_str());
                 let file = File::open(&path)?;
-                r = Region::from_linear_v1(file, region_x, region_z).expect(format!("读取 {} 时失败", path.display()).as_str());
+                r = Region::from_linear_v1(file, region_x, region_z).expect(format!("线程{}: 读取 {} 时失败", num, path.display()).as_str());
             }
             FileType::LinearV2 => {
                 let file = File::open(&path)?;
-                r = Region::from_linear_v2(file).expect(format!("读取 {} 时失败", path.display()).as_str());
+                r = Region::from_linear_v2(file).expect(format!("线程{}: 读取 {} 时失败", num, path.display()).as_str());
             }
         }
 
@@ -196,22 +217,22 @@ fn handle_convert(files: Vec<PathBuf>, to: FileType, args: ConvertArgs) -> Resul
                 output_file_path = output_path.join(file_name).with_extension("mca");
                 let mut output_file = File::create(&output_file_path)?;
                 r.to_anvil(args.compress_level as u8, 2, &mut output_file, &output_file_path)
-                    .expect(format!("转换 {} 时失败", path.display()).as_str());
+                    .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
             }
             FileType::LinearV1 => {
                 output_file_path = output_path.join(file_name).with_extension("linear");
                 let mut output_file = File::create(&output_file_path)?;
                 r.to_linear_v1(&mut output_file, args.compress_level)
-                    .expect(format!("转换 {} 时失败", path.display()).as_str());
+                    .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
             }
             FileType::LinearV2 => {
                 output_file_path = output_path.join(file_name).with_extension("linear");
                 let mut output_file = File::create(&output_file_path)?;
                 r.to_linear_v2(&mut output_file, args.compress_level, args.grid_size)
-                    .expect(format!("转换 {} 时失败", path.display()).as_str());
+                    .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
             }
         }
-        println!("转换 {} -> {} 成功！", path.display(), output_file_path.display());
+        println!("线程{}: 转换 {} -> {} 成功！", num, path.display(), output_file_path.display());
     }
 
     Ok(())

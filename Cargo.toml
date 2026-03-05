@@ -6,8 +6,19 @@ edition = "2024"
 [workspace]
 members = ["mclinear"]
 
+[profile.release]
+opt-level = 3
+debug = false
+overflow-checks = false
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug-assertions = false
+
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
+humantime = "2.3.0"
 mclinear = {path = "mclinear"}
 walkdir = "2.5.0"
 
