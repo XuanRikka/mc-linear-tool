@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use humantime::format_duration;
 use clap::{Args, Parser, Subcommand};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use utils::*;
 use mclinear::region::Region;
@@ -115,7 +116,18 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
 
     let mut files = get_dir_file(&args.input_path, "mca", max_depth)?;
     files.extend(get_dir_file(&args.input_path, "linear", max_depth)?);
-    println!("收集存档文件完成，开始转换");
+    let total_files = files.len() as u64;
+
+    let mp = Arc::new(MultiProgress::new());
+    let pb = mp.add(ProgressBar::new(total_files));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{wide_bar:.cyan/blue}] {pos}/{len} {per_sec} {msg}"
+        )?
+        .progress_chars("=>-"),
+    );
+    pb.set_message("转换中");
+    mp.println(format!("收集存档文件完成，共 {} 个文件，开始转换", total_files))?;
 
     let start_time = Instant::now();
 
@@ -128,8 +140,10 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
         let tasks_rc = Arc::clone(&tasks);
         let thread_args = args.clone();
         let to = to.clone();
+        let thread_pb = pb.clone();
+        let thread_mp = Arc::clone(&mp);
         handles.push(spawn(move || {
-            handle_convert(tasks_rc, to, thread_args, i as u32)
+            handle_convert(tasks_rc, to, thread_args, i as u32, thread_pb, thread_mp)
         }));
     }
 
@@ -138,15 +152,22 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
             .map_err(|e| format!("线程 panic: {:?}", e))??;
     }
 
-    println!("转换完成！");
-    println!("耗时：{}", format_duration(Duration::from_secs(start_time.elapsed().as_secs())));
+    pb.finish_with_message("转换完成");
+    mp.println(format!("耗时：{}", format_duration(Duration::from_secs(start_time.elapsed().as_secs()))))?;
 
 
     Ok(())
 }
 
 
-fn handle_convert(files: Arc<Mutex<VecDeque<PathBuf>>>, to: FileType, args: ConvertArgs, num: u32) -> Result<(), Box<dyn Error + Send + Sync>>
+fn handle_convert(
+    files: Arc<Mutex<VecDeque<PathBuf>>>,
+    to: FileType,
+    args: ConvertArgs,
+    num: u32,
+    progress: ProgressBar,
+    mp: Arc<MultiProgress>,
+) -> Result<(), Box<dyn Error + Send + Sync>>
 {
     loop
     {
@@ -156,7 +177,7 @@ fn handle_convert(files: Arc<Mutex<VecDeque<PathBuf>>>, to: FileType, args: Conv
         };
         if path_.is_none()
         {
-            println!("线程 {} 执行完成",num);
+            mp.println(format!("线程 {} 执行完成", num))?;
             break
         }
 
@@ -232,7 +253,13 @@ fn handle_convert(files: Arc<Mutex<VecDeque<PathBuf>>>, to: FileType, args: Conv
                     .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
             }
         }
-        println!("线程{}: 转换 {} -> {} 成功！", num, path.display(), output_file_path.display());
+        progress.inc(1);
+        mp.println(format!(
+            "线程{}: 转换 {} -> {} 成功！",
+            num,
+            path.display(),
+            output_file_path.display()
+        ))?;
     }
 
     Ok(())

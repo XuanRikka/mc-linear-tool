@@ -19,6 +19,7 @@ debug-assertions = false
 [dependencies]
 clap = { version = "4.5.60", features = ["derive"] }
 humantime = "2.3.0"
+indicatif = "0.17.11"
 mclinear = {path = "mclinear"}
 walkdir = "2.5.0"
 
