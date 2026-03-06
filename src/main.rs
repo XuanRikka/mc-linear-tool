@@ -6,7 +6,7 @@ use std::path::{PathBuf};
 use std::thread::{spawn, JoinHandle};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use humantime::format_duration;
 use clap::{Args, Parser, Subcommand};
@@ -139,7 +139,7 @@ fn handle_command(to: FileType, args: ConvertArgs) -> Result<(), Box<dyn Error +
     }
 
     println!("转换完成！");
-    println!("耗时：{}", format_duration(start_time.elapsed()));
+    println!("耗时：{}", format_duration(Duration::from_secs(start_time.elapsed().as_secs())));
 
 
     Ok(())
