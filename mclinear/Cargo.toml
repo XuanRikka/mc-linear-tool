@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 binrw = { version = "0.15.0" }
-xxhash-rust = { version = "0.8.15", features = ["xxh64"] }
+xxhash-rust = { version = "0.8.15", features = ["xxh64", "xxh32"] }
 zstd = { version = "0.13.3", default-features = false, features = ["arrays", "legacy"]}
 flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 lz4_flex = { version = "0.12.0", default-features = false, features = ["frame"] }
+byteorder = "1.5.0"

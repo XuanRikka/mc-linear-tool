@@ -38,6 +38,8 @@ enum Commands
     /// 转换为Anvil格式（即原版格式）
     #[command(name = "to-anvil")]
     ToAnvil(ConvertArgs),
+    #[command(name = "to-b-linear-v3", visible_alias = "to-b-linear")]
+    ToBLinearV3(ConvertArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -53,7 +55,7 @@ struct ConvertArgs {
         long,
         default_value_t = 1,
         long_help = "压缩等级，具体范围由格式所采用的压缩算法决定\n\
-                     linear 系列 (zstd): 1-22\n\
+                     linear/b-linear 系列 (zstd): -6 - 22\n\
                      anvil 系列 (deflate): 1-9"
     )]
     #[arg(long, default_value_t = 1)]
@@ -90,6 +92,9 @@ fn main() {
         }
         Commands::ToLinearV2(args) => {
             handle_command(FileType::LinearV2, args).expect("转换失败");
+        }
+        Commands::ToBLinearV3(args) => {
+            handle_command(FileType::BLinearV3, args).expect("转换失败");
         }
     }
 
@@ -208,6 +213,11 @@ fn handle_convert(
                 let file = File::open(&path)?;
                 r = Region::from_linear_v2(file).expect(format!("线程{}: 读取 {} 时失败", num, path.display()).as_str());
             }
+            FileType::BLinearV3 => {
+                let (region_x, region_z) = parse_region_coords(&path).expect(format!("解析 {} 的区域坐标时失败", path.display()).as_str());
+                let file = File::open(&path)?;
+                r = Region::from_b_linear_v3(file, region_x, region_z).expect(format!("线程{}: 读取 {} 时失败", num, path.display()).as_str());
+            }
         }
 
         if !path.parent().unwrap().exists()
@@ -250,6 +260,12 @@ fn handle_convert(
                 output_file_path = output_path.join(file_name).with_extension("linear");
                 let mut output_file = File::create(&output_file_path)?;
                 r.to_linear_v2(&mut output_file, args.compress_level, args.grid_size)
+                    .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
+            }
+            FileType::BLinearV3 => {
+                output_file_path = output_path.join(file_name).with_extension("b_linear");
+                let mut output_file = File::create(&output_file_path)?;
+                r.to_b_linear_v3(&mut output_file, args.compress_level)
                     .expect(format!("线程{}: 转换 {} 时失败", num, path.display()).as_str());
             }
         }

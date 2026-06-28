@@ -3,7 +3,9 @@ use std::io::{Read, Seek, SeekFrom};
 use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
 
-use binrw::{BinRead, Error::BadMagic};
+use byteorder::{ReadBytesExt};
+
+use crate::models::{b_linear_v3, linear_v2};
 
 /// 返回(x,z)
 pub fn parse_region_coords(path: impl AsRef<Path>) -> Result<(i32, i32), String> {
@@ -58,45 +60,48 @@ pub fn collect_mcc_files(path: impl AsRef<Path>) -> Result<Option<Vec<PathBuf>>,
     }
 }
 
-#[derive(BinRead, Debug)]
-#[brw(big)]
-pub struct Linear
-{
-    #[brw(magic = b"\xC3\xFF\x13\x18\x3C\xCA\x9D\x9A")]
-    pub version: u8,
-}
-
 #[derive(Clone, Debug)]
 pub enum FileType
 {
     Anvil,
     LinearV1,
-    LinearV2
+    LinearV2,
+    BLinearV3,
 }
 
 /// 简单判断文件类型，由于mca无文件头所以无法准确判断是否为mca文件，因此仅linear系列文件可信
 pub fn get_file_type<R: Read + Seek>(file: &mut R) -> Result<FileType, Box<dyn Error + Sync + Send>>
 {
     let pos = file.stream_position()?;
-    let result = Linear::read(file);
-    // 恢复游标（无论成功失败都恢复）
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)?;
     file.seek(SeekFrom::Start(pos))?;
 
-    match result {
-        Err(BadMagic { .. }) => {
-            Ok(FileType::Anvil)
-        },
-
-        Err(e) => Err(Box::new(e)),
-
-        Ok(linear) => {
-            match linear.version
+    match magic {
+        b_linear_v3::MAGIC => {
+            let version = file.read_u8()?;
+            if version != 3
             {
-                1 | 2 => Ok(FileType::LinearV1),
-                3 => Ok(FileType::LinearV2),
-                _ => Err("未知的linear版本".into())
+                return Err("不受支持的b_linear版本".into())
+            }
+            Ok(FileType::BLinearV3)
+        }
+        linear_v2::MAGIC => {
+            let version = file.read_u8()?;
+            if version == 1 && version == 2
+            {
+                Ok(FileType::LinearV1)
+            }
+            else if version == 3
+            {
+                Ok(FileType::LinearV2)
+            }
+            else
+            {
+                Err("不受支持的linear版本".into())
             }
         }
+        _ => Ok(FileType::Anvil)
     }
 }
 

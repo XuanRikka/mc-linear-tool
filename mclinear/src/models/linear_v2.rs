@@ -9,7 +9,7 @@ use zstd::stream::write::Encoder;
 use zstd::zstd_safe::CompressionLevel;
 use xxhash_rust::xxh64::xxh64;
 
-pub const MAGIC: &[u8; 8] = b"\xC3\xFF\x13\x18\x3C\xCA\x9D\x9A";
+pub const MAGIC: [u8; 8] = [0xC3, 0xFF, 0x13, 0x18, 0x3C, 0xCA, 0x9D, 0x9A];
 
 #[derive(BinRead, BinWrite, Debug)]
 #[brw(big)]

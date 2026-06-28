@@ -6,12 +6,13 @@ use std::hash::Hasher;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::iter::zip;
 use std::path::Path;
+use byteorder::{BigEndian, WriteBytesExt};
 use xxhash_rust::xxh64::Xxh64;
 use zstd::stream::write::Encoder;
 use zstd::zstd_safe::CompressionLevel;
 use zstd::decode_all;
 
-use crate::models::{anvil, linear_v1, linear_v2};
+use crate::models::{anvil, linear_v1, linear_v2, b_linear_v3};
 use crate::utils::{collect_mcc_files, parse_region_coords};
 
 #[derive(Debug)]
@@ -70,6 +71,7 @@ impl Region {
         ))
     }
 
+    /// compression_level: -6 - 22
     pub fn to_linear_v1<F: Write + Seek>(self, mut f: F, compression_level: CompressionLevel)
         -> Result<(), Box<dyn Error>>
     {
@@ -111,7 +113,7 @@ impl Region {
 
         superblock.write(&mut f)?;
         f.write_all(&compress_data)?;
-        f.write_all(linear_v1::MAGIC)?;
+        f.write_all(linear_v1::MAGIC.as_slice())?;
         f.flush()?;
         Ok(())
     }
@@ -181,8 +183,9 @@ impl Region {
         ))
     }
 
+    /// compression_level: -6 - 22
     pub fn to_linear_v2<W: Write + Seek>(mut self, f: &mut W, compression_level: CompressionLevel,
-                                  grid_size: i8) -> Result<(), Box<dyn Error>>
+                                         grid_size: i8) -> Result<(), Box<dyn Error>>
     {
         if ![1, 2, 4, 8, 16, 32].contains(&grid_size) {
             return Err(format!("Incorrect grid_size: {}", grid_size).into());
@@ -244,7 +247,7 @@ impl Region {
             compression_level
         )?;
 
-        f.write_all(linear_v2::MAGIC)?;
+        f.write_all(linear_v2::MAGIC.as_slice())?;
 
         Ok(())
     }
@@ -280,6 +283,15 @@ impl Region {
         })
     }
 
+    /// compression_level: 0-9
+    /// 一般建议6，lz4和无压缩下此字段无用
+    /// compression_type:
+    ///     1: gzip
+    ///     2: zlib
+    ///     3: 无压缩
+    ///     4: lz4
+    ///     _: 自定义/未知
+    /// 一般选择2
     pub fn to_anvil<P: AsRef<Path>, W: Write + Seek>
         (self, compression_level: u8, compression_type: u8, mut file: W, path: P)
         -> Result<(), Box<dyn Error>>
@@ -297,6 +309,64 @@ impl Region {
         )?;
         file.seek(SeekFrom::Start(0))?;
         anvil::serialize_superblock(&mut file, &chunks_info)?;
+
+        Ok(())
+    }
+
+    pub fn from_b_linear_v3<F: Read + Seek>(mut f: F, region_x: i32, region_z: i32)
+        -> Result<Region, Box<dyn Error>>
+    {
+        let header = b_linear_v3::Header::read(&mut f)?;
+        let offsets = b_linear_v3::BucketOffsetTable::read(&mut f)?;
+
+        let chunks = b_linear_v3::read_chunks(
+            &mut f, offsets.offsets, header.xxhash32_seed, region_x, region_z
+        )?;
+
+        Ok(
+            Region {
+                chunks,
+                region_x,
+                region_z,
+                nbt_features: HashMap::new()
+            }
+        )
+    }
+
+    /// compression_level: -6 - 22
+    pub fn to_b_linear_v3<F: Write + Seek>(self, mut f: F, compression_level: CompressionLevel)
+        -> Result<(), Box<dyn Error>>
+    {
+        if self.chunks.len() != 1024
+        {
+            return Err(format!("区块数量异常，应为1024，实为{}", self.chunks.len()).into());
+        }
+        let xxhash_seed: u32 = 0x0721;
+
+        let header = b_linear_v3::Header {
+            version: 3,
+            zstd_level: compression_level as i8,
+            xxhash32_seed: xxhash_seed
+        };
+
+        header.write(&mut f)?;
+
+        // 预留位置表空间
+        let offset_table_pos = f.stream_position()?;
+        f.write_all(&vec![0u8; 16 * 8])?;
+
+        let offset_table = b_linear_v3::write_chunks(
+            &mut f, self.chunks, xxhash_seed, compression_level
+        )?;
+
+        f.seek(SeekFrom::Start(offset_table_pos))?;
+
+        for i in offset_table
+        {
+            f.write_u64::<BigEndian>(i)?;
+        }
+
+        f.seek(SeekFrom::End(0))?;
 
         Ok(())
     }
